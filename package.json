@@ -53,6 +53,7 @@
     "apollo-link-timeout": "^1.1.8",
     "aws-sdk": "^2.534.0",
     "braces": "^3.0.2",
+    "axios": "^0.18.0",
     "chai-fs": "^2.0.0",
     "csvtojson": "^2.0.8",
     "graphql": "^14.0.2",

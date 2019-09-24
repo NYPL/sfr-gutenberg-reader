@@ -8,6 +8,7 @@ import { InMemoryCache } from 'apollo-cache-inmemory'
 import ApolloLinkTimeout from 'apollo-link-timeout'
 import moment from 'moment'
 import yaml from 'js-yaml'
+import axios from 'axios'
 
 import RDFParser from './parseRDF'
 import logger from './helpers/logger'
@@ -103,6 +104,59 @@ const getRepos = () => {
       .catch(() => resolve(false))
   })
 }
+
+exports.getRepoRange = async (startPos, repoCount) => {
+  const repoIDs = []
+  const startPage = (startPos - (startPos % 100)) / 100
+  let endPage = (((startPos + repoCount) - ((startPos + repoCount) % 100)) / 100)
+  const finalPageSize = repoCount % 100 == 0 ? 100 : repoCount % 100 
+  let pageSize = 100
+  if(endPage == startPage){ endPage++ }
+  console.log(startPage, endPage)
+  for(let i = startPage; i < endPage; i++){
+    try{
+      if(i == endPage - 1){
+        pageSize = finalPageSize
+      }
+      let pageRepos = await exports.loadRepoPage(i, pageSize)
+      repoIDs.push(...pageRepos)
+    } catch(err) {
+      logger.error(err)
+      return false
+    }
+  }
+  return repoIDs
+}
+
+exports.loadRepoPage = (page, pageSize) => {
+  const repoIDs = []
+  return new Promise((resolve, reject) => {
+    logger.debug(`Loading page ${page} of GITenberg repositories`)
+      axios.get(`https://api.github.com/users/GITenberg/repos?page=${page}&per_page=${pageSize}`)
+        .then(data => {
+          const repos = data.data
+          if (repos === null || repos.length == 0) resolve(false)
+    
+          repos.forEach((repo) => {
+            let name = repo['name']
+    
+            let idnoMatch = pgIDRegex.exec(name)
+            if (!idnoMatch) return
+    
+            let idno = idnoMatch[0]
+    
+            let url = repo.html_url
+    
+            repoIDs.push([name, idno, url])
+          })
+          resolve(repoIDs)
+        })
+        .catch(err => {
+          reject(err)
+        })
+  })
+}
+
 /* eslint-disable prefer-promise-reject-errors */
 const getRDF = (repo, lcRels) => new Promise((resolve) => {
   const repoName = repo[0]
