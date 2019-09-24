@@ -11,14 +11,11 @@ import moment from 'moment'
 import RDFParser from './parseRDF'
 import logger from './helpers/logger'
 
-const httpLink = createHttpLink({
-  uri: 'https://api.github.com/graphql',
-  fetch: fetch
-})
+const httpLink = createHttpLink({ uri: 'https://api.github.com/graphql', fetch })
 
 const errorLink = onError(({ graphQLErrors, networkError }) => {
   if (graphQLErrors) {
-    graphQLErrors.map(({ message, location, path }) => {
+    graphQLErrors.forEach(({ message, location, path }) => {
       logger.error(`Error in GraphQL Query: ${message}, Location: ${location}, Path: ${path}`)
     })
   } else if (networkError) {
@@ -32,12 +29,13 @@ const timeoutLink = new ApolloLinkTimeout(20000)
 
 const errorTimeoutHttpLink = timeoutLink.concat(errorHttpLink)
 
+// eslint-disable-next-line no-unused-vars
 const authLink = setContext((_, { headers }) => {
   const token = process.env.GITHUB_API_TOKEN
   return {
     headers: {
-      authorization: token ? `Bearer ${token}` : ''
-    }
+      authorization: token ? `Bearer ${token}` : '',
+    },
   }
 })
 
@@ -47,27 +45,27 @@ const authLink = setContext((_, { headers }) => {
 const apolloOpts = {
   watchQuery: {
     fetchPolicy: 'no-cache',
-    errorPolicy: 'ignore'
+    errorPolicy: 'ignore',
   },
   query: {
     fetchPolicy: 'no-cache',
-    errorPolicy: 'all'
-  }
+    errorPolicy: 'all',
+  },
 }
 
 const client = new ApolloClient({
   link: authLink.concat(errorTimeoutHttpLink),
   cache: new InMemoryCache(),
-  defaultOptions: apolloOpts
+  defaultOptions: apolloOpts,
 })
 
 const pgIDRegex = /([0-9]+)$/
 
-exports.getRepos = () => {
-  let first = 25
-  let fetchBoundary = moment().subtract(process.env.UPDATE_MAX_AGE_DAYS, 'days')
-  let repoIDs = []
-  return new Promise((resolve, reject) => {
+const getRepos = () => {
+  const first = 25
+  const fetchBoundary = moment().subtract(process.env.UPDATE_MAX_AGE_DAYS, 'days')
+  const repoIDs = []
+  return new Promise((resolve) => {
     client.query({
       query: gql`
               {
@@ -79,87 +77,89 @@ exports.getRepos = () => {
                 }
               }
             }
-          `
-    }).then(data => {
-
+          `,
+    }).then((data) => {
       // If data is null, the GraphQL request errored out and should return false
-      if (data['data'] == 'null') resolve(false)
+      if (data.data === 'null') resolve(false)
 
-      let repoList = data['data']['organization']['repositories']['nodes']
+      const repoList = data.data.organization.repositories.nodes
       repoList.forEach((repo) => {
-        let updatedAt = moment(repo['pushedAt'])
+        const updatedAt = moment(repo.pushedAt)
         if (updatedAt.isBefore(fetchBoundary)) return
-        let name = repo['name']
+        const name = repo.name
 
-        let idnoMatch = pgIDRegex.exec(name)
+        const idnoMatch = pgIDRegex.exec(name)
         if (!idnoMatch) return
 
-        let idno = idnoMatch[0]
+        const idno = idnoMatch[0]
 
-        let url = repo['url']
+        const url = repo.url
 
         repoIDs.push([name, idno, url])
       })
       resolve(repoIDs)
     })
-      .catch(err => {
-        resolve(false)
-      })
+      .catch(() => resolve(false))
   })
 }
 /* eslint-disable prefer-promise-reject-errors */
-exports.getRDF = (repo, lcRels) => {
-  return new Promise((resolve, reject) => {
-    let repoName = repo[0]
-    let gutID = repo[1]
-    let repoURI = repo[2]
-    let rdfPath = 'master:pg' + gutID + '.rdf'
-    client.query({
-      query: gql`
-              {
-                repository(owner:\"GITenberg\", name:\"${repoName}\"){
-                  object(expression:\"${rdfPath}\"){
-                    id
-                    ... on Blob {text}
-                  }
-              }
+const getRDF = (repo, lcRels) => new Promise((resolve) => {
+  const repoName = repo[0]
+  const gutID = repo[1]
+  const repoURI = repo[2]
+  const rdfPath = `master:pg${gutID}.rdf`
+  client.query({
+    query: gql`
+            {
+              repository(owner:\"GITenberg\", name:\"${repoName}\"){
+                object(expression:\"${rdfPath}\"){
+                  id
+                  ... on Blob {text}
+                }
             }
-          `
-    }).then(data => {
-      RDFParser.parseRDF(data, gutID, repoURI, lcRels, (err, rdfData) => {
-        if (err) {
-          resolve({
-            'recordID': gutID,
-            'source': 'gutenberg',
-            'type': 'work',
-            'method': 'insert',
-            'data': err,
-            'status': 500,
-            'message': 'Could not parse Gutenberg Metadata'
-          })
-        } else {
-          resolve({
-            'recordID': gutID,
-            'source': 'gutenberg',
-            'type': 'work',
-            'method': 'insert',
-            'data': rdfData,
-            'status': 200,
-            'message': 'Retrieved Gutenberg Metadata'
-          })
-        }
-      })
-    }).catch(err => {
-      resolve({
-        'recordID': gutID,
-        'source': 'gutenberg',
-        'type': 'work',
-        'method': 'insert',
-        'data': err,
-        'status': 500,
-        'message': 'Error in parsing Gutenberg Record'
-      })
+          }
+        `,
+  }).then((data) => {
+    RDFParser.parseRDF(data, gutID, repoURI, lcRels, (err, rdfData) => {
+      if (err) {
+        resolve({
+          recordID: gutID,
+          source: 'gutenberg',
+          type: 'work',
+          method: 'insert',
+          data: err,
+          status: 500,
+          message: 'Could not parse Gutenberg Metadata',
+        })
+      } else {
+        resolve({
+          recordID: gutID,
+          source: 'gutenberg',
+          type: 'work',
+          method: 'insert',
+          data: rdfData,
+          status: 200,
+          message: 'Retrieved Gutenberg Metadata',
+        })
+      }
+    })
+  }).catch((err) => {
+    resolve({
+      recordID: gutID,
+      source: 'gutenberg',
+      type: 'work',
+      method: 'insert',
+      data: err,
+      status: 500,
+      message: 'Error in parsing Gutenberg Record',
     })
   })
-}
+})
+
+
 /* eslint-enable prefer-promise-reject-errors */
+
+module.exports = [
+  getRDF,
+  getRepos,
+]
