@@ -20,6 +20,8 @@ exports.retrieveRepos = async () => {
 
 exports.getRepoData = async (repoInfo, lcRels) => {
   const rdfValue = await GitFetch.getRDF(repoInfo, lcRels)
+  const coverMeta = await.GitFetch.getCover(repoInfo)
+  console.log(coverMeta)
   return rdfValue
 }
 

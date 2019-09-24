@@ -7,6 +7,7 @@ import { onError } from 'apollo-link-error'
 import { InMemoryCache } from 'apollo-cache-inmemory'
 import ApolloLinkTimeout from 'apollo-link-timeout'
 import moment from 'moment'
+import yaml from 'js-yaml'
 
 import RDFParser from './parseRDF'
 import logger from './helpers/logger'
@@ -156,10 +157,78 @@ const getRDF = (repo, lcRels) => new Promise((resolve) => {
   })
 })
 
+const getMetadataFile = (repo) => new Promise((resolve, reject) => {
+  client.query({
+    query: gql`
+            {
+              repository(owner:\"GITenberg\", name:\"${repo}\"){
+                object(expression:\"metadata.yaml\"){
+                  id
+                  ... on Blob {text}
+                }
+            }
+          }
+        `,
+  }).then((data) => {
+    try {
+      resolve(yaml.safeLoad(data.data.repository.object))
+    } catch (err) {
+      reject(err)
+    }
+  }).catch((err) => {
+    reject(err)
+  })
+})
+
+const fetchCoverFile = (repo, filePath) => new Promise((resolve, reject) => {
+  client.query({
+    query: gql`
+            {
+              repository(owner:\"GITenberg\", name:\"${repo}\"){
+                object(expression:\"${filePath}\"){
+                  id
+                  ... on Blob {text}
+                }
+            }
+          }
+        `,
+  }).then((data) => {
+    try {
+      resolve(data.data)
+    } catch (err) {
+      reject(err)
+    }
+  }).catch((err) => {
+    reject(err)
+  })
+})
+
+const getCover = async (repo) => {
+  const repoName = repo[0]
+  let repoMetadata
+  try {
+    repoMetadata = await getMetadataFile(repoName)
+  } catch (err) {
+    // Nothing to do
+  }
+
+  if (repoMetadata.covers) {
+    repoMetadata.covers.forEach(async (coverMeta) => {
+      if (coverMeta.cover_type !== 'generated') {
+        return fetchCoverFile(repoName, coverMeta.image_path)
+      }
+      return null
+    })
+  }
+
+  return null
+}
+
 
 /* eslint-enable prefer-promise-reject-errors */
 
 module.exports = [
   getRDF,
   getRepos,
+  getCover,
 ]
