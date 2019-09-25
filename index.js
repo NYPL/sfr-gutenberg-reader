@@ -1,5 +1,5 @@
 /* eslint-disable no-await-in-loop */
-import GitFetch from './src/githubDataFetch'
+import { getRepos, getRDF, getCover, getRepoRange } from './src/githubDataFetch'
 import Kinesis from './src/kinesisOutput'
 import Helpers from './src/fetchHelpers'
 import logger from './src/helpers/logger'
@@ -11,7 +11,7 @@ exports.retrieveRepos = async () => {
   do {
     logger.notice('Attempting to retrieve records from GITenberg')
     if (success === false) await Helpers.sleep(10000, tries)
-    success = await GitFetch.getRepos()
+    success = await getRepos()
     tries += 1
   } while (success === false && tries < process.env.REPO_RETRIES)
 
@@ -19,8 +19,8 @@ exports.retrieveRepos = async () => {
 }
 
 exports.getRepoData = async (repoInfo, lcRels) => {
-  const rdfValue = await GitFetch.getRDF(repoInfo, lcRels)
-  const coverMeta = await.GitFetch.getCover(repoInfo)
+  const rdfValue = await getRDF(repoInfo, lcRels)
+  const coverMeta = await getCover(repoInfo)
   console.log(coverMeta)
   return rdfValue
 }
@@ -30,8 +30,8 @@ exports.loadSequentialRepos = async (repoStart, repoCount) => {
   let tries = 0
   do {
     logger.notice(`Attempting to load ${repoCount} GITenberg repos starting at ${ repoStart }`)
-    success = GitFetch.getRepoRange(repoStart, repoCount)
-    tries++
+    success = getRepoRange(repoStart, repoCount)
+    tries += 1
   } while (success === false && tries < 5)
 
   return success
@@ -39,7 +39,7 @@ exports.loadSequentialRepos = async (repoStart, repoCount) => {
 
 exports.handler = async (event, context, callback) => {
   let repoInfo = null
-  if(event.source === 'local.bulk'){
+  if (event.source === 'local.bulk') {
     repoInfo = await exports.loadSequentialRepos(event.repos.start, event.repos.count)
   } else {
     repoInfo = await exports.retrieveRepos()
@@ -51,7 +51,6 @@ exports.handler = async (event, context, callback) => {
   }
 
   const lcRels = await Helpers.loadLCRels()
-  const repoInfo = success
   if (repoInfo.length === 0) {
     logger.notice('No updates made in the fetch period to GITenberg')
     const emptyResult = {
@@ -66,7 +65,7 @@ exports.handler = async (event, context, callback) => {
   for (let i = 0; i < repoInfo.length; i += 1) {
     const metadataRec = await exports.getRepoData(repoInfo[i], lcRels)
     logger.debug('Processed GITenberg record')
-    Kinesis.resultHandler(metadataRec)
+    // Kinesis.resultHandler(metadataRec)
   }
 
   logger.notice('Successfully updated records')

@@ -8,10 +8,12 @@ import { InMemoryCache } from 'apollo-cache-inmemory'
 import ApolloLinkTimeout from 'apollo-link-timeout'
 import moment from 'moment'
 import yaml from 'js-yaml'
-import axios from 'axios'
+import Axios from 'axios'
+import fs from 'fs'
 
 import RDFParser from './parseRDF'
 import logger from './helpers/logger'
+import { LCSHYamlType, LCCYamlType } from './helpers/yamlHelpers'
 
 const httpLink = createHttpLink({ uri: 'https://api.github.com/graphql', fetch })
 
@@ -88,14 +90,12 @@ const getRepos = () => {
       repoList.forEach((repo) => {
         const updatedAt = moment(repo.pushedAt)
         if (updatedAt.isBefore(fetchBoundary)) return
-        const name = repo.name
+        const { name, url } = repo
 
         const idnoMatch = pgIDRegex.exec(name)
         if (!idnoMatch) return
 
         const idno = idnoMatch[0]
-
-        const url = repo.url
 
         repoIDs.push([name, idno, url])
       })
@@ -105,56 +105,54 @@ const getRepos = () => {
   })
 }
 
-exports.getRepoRange = async (startPos, repoCount) => {
+const loadRepoPage = (page, pageSize) => {
+  const repoIDs = []
+  return new Promise((resolve, reject) => {
+    logger.debug(`Loading page ${page} of GITenberg repositories`)
+    Axios.get(`https://api.github.com/users/GITenberg/repos?page=${page}&per_page=${pageSize}`)
+      .then((data) => {
+        const repos = data.data
+        if (repos === null || repos.length === 0) resolve(false)
+
+        repos.forEach((repo) => {
+          const { name } = repo
+
+          const idnoMatch = pgIDRegex.exec(name)
+          if (!idnoMatch) return
+
+          const idno = idnoMatch[0]
+
+          const url = repo.html_url
+
+          repoIDs.push([name, idno, url])
+        })
+        resolve(repoIDs)
+      })
+      .catch((err) => reject(err))
+  })
+}
+
+const getRepoRange = async (startPos, repoCount) => {
   const repoIDs = []
   const startPage = (startPos - (startPos % 100)) / 100
   let endPage = (((startPos + repoCount) - ((startPos + repoCount) % 100)) / 100)
-  const finalPageSize = repoCount % 100 == 0 ? 100 : repoCount % 100 
+  const finalPageSize = repoCount % 100 === 0 ? 100 : repoCount % 100
   let pageSize = 100
-  if(endPage == startPage){ endPage++ }
-  console.log(startPage, endPage)
-  for(let i = startPage; i < endPage; i++){
-    try{
-      if(i == endPage - 1){
+  if (endPage === startPage) { endPage += 1 }
+  for (let i = startPage; i < endPage; i += 1) {
+    try {
+      if (i === endPage - 1) {
         pageSize = finalPageSize
       }
-      let pageRepos = await exports.loadRepoPage(i, pageSize)
+      // eslint-disable-next-line no-await-in-loop
+      const pageRepos = await loadRepoPage(i, pageSize)
       repoIDs.push(...pageRepos)
-    } catch(err) {
+    } catch (err) {
       logger.error(err)
       return false
     }
   }
   return repoIDs
-}
-
-exports.loadRepoPage = (page, pageSize) => {
-  const repoIDs = []
-  return new Promise((resolve, reject) => {
-    logger.debug(`Loading page ${page} of GITenberg repositories`)
-      axios.get(`https://api.github.com/users/GITenberg/repos?page=${page}&per_page=${pageSize}`)
-        .then(data => {
-          const repos = data.data
-          if (repos === null || repos.length == 0) resolve(false)
-    
-          repos.forEach((repo) => {
-            let name = repo['name']
-    
-            let idnoMatch = pgIDRegex.exec(name)
-            if (!idnoMatch) return
-    
-            let idno = idnoMatch[0]
-    
-            let url = repo.html_url
-    
-            repoIDs.push([name, idno, url])
-          })
-          resolve(repoIDs)
-        })
-        .catch(err => {
-          reject(err)
-        })
-  })
 }
 
 /* eslint-disable prefer-promise-reject-errors */
@@ -175,6 +173,7 @@ const getRDF = (repo, lcRels) => new Promise((resolve) => {
           }
         `,
   }).then((data) => {
+    logger.debug(`Loading metadata for ${gutID}`)
     RDFParser.parseRDF(data, gutID, repoURI, lcRels, (err, rdfData) => {
       if (err) {
         resolve({
@@ -216,7 +215,7 @@ const getMetadataFile = (repo) => new Promise((resolve, reject) => {
     query: gql`
             {
               repository(owner:\"GITenberg\", name:\"${repo}\"){
-                object(expression:\"metadata.yaml\"){
+                object(expression:\"master:metadata.yaml\"){
                   id
                   ... on Blob {text}
                 }
@@ -225,7 +224,9 @@ const getMetadataFile = (repo) => new Promise((resolve, reject) => {
         `,
   }).then((data) => {
     try {
-      resolve(yaml.safeLoad(data.data.repository.object))
+      const gutenSchema = yaml.Schema.create([LCSHYamlType, LCCYamlType])
+      const yamlConfig = yaml.load(data.data.repository.object.text, { schema: gutenSchema })
+      resolve(yamlConfig)
     } catch (err) {
       reject(err)
     }
@@ -234,28 +235,18 @@ const getMetadataFile = (repo) => new Promise((resolve, reject) => {
   })
 })
 
-const fetchCoverFile = (repo, filePath) => new Promise((resolve, reject) => {
-  client.query({
-    query: gql`
-            {
-              repository(owner:\"GITenberg\", name:\"${repo}\"){
-                object(expression:\"${filePath}\"){
-                  id
-                  ... on Blob {text}
-                }
-            }
-          }
-        `,
-  }).then((data) => {
-    try {
-      resolve(data.data)
-    } catch (err) {
-      reject(err)
-    }
-  }).catch((err) => {
-    reject(err)
+const fetchCoverFile = async (gutenPath, repoName, filePath) => {
+  const fileURL = gutenPath.replace('ebooks', 'files')
+  const coverURL = `${fileURL}/${filePath}`
+  const fileWriter = fs.createWriteStream(repoName)
+  const fileResp = await Axios({ url: coverURL, method: 'GET', responseType: 'stream' })
+  fileResp.data.pipe(fileWriter)
+
+  return new Promise((resolve, reject) => {
+    fileWriter.on('finish', resolve(repoName))
+    fileWriter.on('error', reject)
   })
-})
+}
 
 const getCover = async (repo) => {
   const repoName = repo[0]
@@ -263,15 +254,18 @@ const getCover = async (repo) => {
   try {
     repoMetadata = await getMetadataFile(repoName)
   } catch (err) {
-    // Nothing to do
+    logger.error(err)
   }
 
   if (repoMetadata.covers) {
+    logger.debug(`Found covers in ${repoName}`)
     repoMetadata.covers.forEach(async (coverMeta) => {
+      logger.debug(`Cover Type: ${coverMeta.cover_type} | Cover Path: ${coverMeta.image_path}`)
       if (coverMeta.cover_type !== 'generated') {
-        return fetchCoverFile(repoName, coverMeta.image_path)
+        await fetchCoverFile(repoMetadata.url, repoMetadata._repo, coverMeta.image_path)
+        console.log(coverFile)
+        return coverFile
       }
-      return null
     })
   }
 
@@ -281,8 +275,10 @@ const getCover = async (repo) => {
 
 /* eslint-enable prefer-promise-reject-errors */
 
-module.exports = [
+module.exports = {
+  getRepoRange,
+  loadRepoPage,
   getRDF,
   getRepos,
   getCover,
-]
+}
