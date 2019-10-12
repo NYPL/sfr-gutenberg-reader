@@ -21,7 +21,6 @@ exports.retrieveRepos = async () => {
 exports.getRepoData = async (repoInfo, lcRels) => {
   const rdfValue = await getRDF(repoInfo, lcRels)
   const coverMeta = await getCover(repoInfo)
-  console.log(coverMeta)
   return rdfValue
 }
 
@@ -65,7 +64,7 @@ exports.handler = async (event, context, callback) => {
   for (let i = 0; i < repoInfo.length; i += 1) {
     const metadataRec = await exports.getRepoData(repoInfo[i], lcRels)
     logger.debug('Processed GITenberg record')
-    // Kinesis.resultHandler(metadataRec)
+    Kinesis.resultHandler(metadataRec)
   }
 
   logger.notice('Successfully updated records')

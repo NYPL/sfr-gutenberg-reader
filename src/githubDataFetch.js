@@ -262,8 +262,8 @@ const getCover = async (repo) => {
     repoMetadata.covers.forEach(async (coverMeta) => {
       logger.debug(`Cover Type: ${coverMeta.cover_type} | Cover Path: ${coverMeta.image_path}`)
       if (coverMeta.cover_type !== 'generated') {
-        await fetchCoverFile(repoMetadata.url, repoMetadata._repo, coverMeta.image_path)
-        console.log(coverFile)
+        // eslint-disable-next-line no-underscore-dangle
+        const coverFile = await fetchCoverFile(repoMetadata.url, repoMetadata._repo, coverMeta.image_path)
         return coverFile
       }
     })
